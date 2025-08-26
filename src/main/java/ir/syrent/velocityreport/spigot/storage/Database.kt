@@ -19,9 +19,9 @@ object Database {
     private var database: ir.syrent.velocityreport.database.Database? = null
     var type: DBType = DBType.SQLITE
 
-    init {
-        val storage = YamlConfig(Ruom.getPlugin().dataFolder, "storage.yml")
+    val storage = YamlConfig(Ruom.getPlugin().dataFolder, "storage.yml")
 
+    init {
         if (storage.config.getString("type").equals("MySQL", true)) {
             val section: ConfigurationSection = storage.config.getConfigurationSection("mysql")!!
             val credentials = MySQLCredentials.mySQLCredentials(

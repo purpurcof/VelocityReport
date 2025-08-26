@@ -7,3 +7,12 @@ mysql:
     password: ""
     ssl: false
     pooling_size: 5
+    max_lifetime: 1800000
+    idle_timeout: 600000
+    connection_timeout: 30000
+    validation_timeout: 5000
+    initialization_fail_timeout: 30000
+    minimum_idle: 3
+    auto_commit: true
+    is_register_mbeans: false
+    leak_detection_threshold: 60000

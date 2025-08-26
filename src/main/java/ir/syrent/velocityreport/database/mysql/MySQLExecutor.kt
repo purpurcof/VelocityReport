@@ -13,7 +13,8 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.*
 import java.util.concurrent.*
-import kotlin.collections.HashSet
+
+typealias DatabaseStorage = ir.syrent.velocityreport.spigot.storage.Database
 
 abstract class MySQLExecutor(
     private val credentials: MySQLCredentials,
@@ -40,15 +41,48 @@ abstract class MySQLExecutor(
             }
         }
 
+        /*type: SQLite
+mysql:
+    address: localhost
+    port: 3306
+    database: velocityreport
+    username: root
+    password: ""
+    ssl: false
+    pooling_size: 5
+    max_lifetime: 1800000
+    idle_timeout: 600000
+    connection_timeout: 30000
+    validation_timeout: 5000
+    initialization_fail_timeout: 30000
+    minimum_idle: 3
+    auto_commit: true
+    is_register_mbeans: false
+    leak_detection_threshold: 60000*/
+
         val hikariConfig = HikariConfig()
         hikariConfig.jdbcUrl = credentials.url
         hikariConfig.driverClassName = driverClassName
         hikariConfig.username = credentials.username
         hikariConfig.password = credentials.password
-        hikariConfig.minimumIdle = 3
+        hikariConfig.minimumIdle = DatabaseStorage.storage.config.getInt("mysql.minimum_idle", 3)
         hikariConfig.maximumPoolSize = poolingSize.coerceAtLeast(3)
         hikariConfig.poolName = "${Ruom.getPlugin().name.lowercase()}-hikari-pool"
-        hikariConfig.initializationFailTimeout = 30000
+        hikariConfig.initializationFailTimeout = DatabaseStorage.storage.config.getLong("mysql.initialization_fail_timeout", 30000)
+
+        hikariConfig.connectionTestQuery = "SELECT 1"
+        hikariConfig.validationTimeout = DatabaseStorage.storage.config.getLong("mysql.validation_timeout", 5000)
+        hikariConfig.connectionTimeout = DatabaseStorage.storage.config.getLong("mysql.connection_timeout", 30000)
+        hikariConfig.idleTimeout = DatabaseStorage.storage.config.getLong("mysql.idle_timeout", 600000)
+        hikariConfig.maxLifetime = DatabaseStorage.storage.config.getLong("mysql.max_lifetime", 1800000)
+
+        hikariConfig.isAutoCommit = DatabaseStorage.storage.config.getBoolean("mysql.auto_commit", true)
+        hikariConfig.isRegisterMbeans = DatabaseStorage.storage.config.getBoolean("mysql.is_register_mbeans", false)
+
+        hikariConfig.leakDetectionThreshold = DatabaseStorage.storage.config.getLong("mysql.leak_detection_threshold", 60000)
+
+        hikariConfig.addDataSourceProperty("socketTimeout", TimeUnit.SECONDS.toMillis(30).toString());
+        hikariConfig.addDataSourceProperty("tcpKeepAlive", "true")
 
         hikariConfig.addDataSourceProperty("socketTimeout", TimeUnit.SECONDS.toMillis(30).toString());
 
@@ -100,8 +134,14 @@ abstract class MySQLExecutor(
     private fun executeQuery(query: Query): CompletableFuture<Int> {
         val completableFuture = CompletableFuture<Int>()
         val runnable = Runnable {
-            val connection = createConnection()
+            var connection: Connection? = null
             try {
+                connection = createConnection()
+                if (connection == null) {
+                    completableFuture.complete(StatusCode.FAILED.code)
+                    return@Runnable
+                }
+
                 val preparedStatement = query.createPreparedStatement(connection)
                 var resultSet: ResultSet? = null
                 if (query.statement.startsWith("INSERT") ||
@@ -110,20 +150,22 @@ abstract class MySQLExecutor(
                     query.statement.startsWith("ALTER") ||
                     query.statement.startsWith("CREATE")
                 ) preparedStatement.executeUpdate() else resultSet = preparedStatement.executeQuery()
+
                 query.completableFuture.complete(resultSet)
-                closeConnection(connection)
                 completableFuture.complete(StatusCode.FINISHED.code)
             } catch (e: SQLException) {
                 onQueryFail(query)
+                Ruom.error("Failed to execute query: ${query.statement}")
                 e.printStackTrace()
                 query.increaseFailedAttempts()
                 if (query.failedAttempts > failAttemptRemoval) {
-                    closeConnection(connection)
                     completableFuture.complete(StatusCode.FINISHED.code)
                     onQueryRemoveDueToFail(query)
+                } else {
+                    completableFuture.complete(StatusCode.FAILED.code)
                 }
+            } finally {
                 closeConnection(connection)
-                completableFuture.complete(StatusCode.FAILED.code)
             }
         }
         threadPool.submit(runnable)
